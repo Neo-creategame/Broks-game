@@ -1,0 +1,59 @@
+body {
+  margin: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 画面中央の照準 */
+#crosshair {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 100;
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: "";
+  position: absolute;
+  background: white;
+}
+
+#crosshair::before {
+  left: 9px;
+  top: 0;
+  width: 2px;
+  height: 20px;
+}
+
+#crosshair::after {
+  left: 0;
+  top: 9px;
+  width: 20px;
+  height: 2px;
+}
+
+/* 画面左上のUI要素 */
+#ui, #fps-counter {
+  position: fixed;
+  left: 20px;
+  color: white;
+  font-family: sans-serif;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 10px 16px;
+  border-radius: 50px;
+  pointer-events: none;
+  z-index: 100;
+}
+
+#ui {
+  top: 20px;
+}
+
+#fps-counter {
+  top: 65px;
+}

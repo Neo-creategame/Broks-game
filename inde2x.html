@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>マイクラ風 3Dブロックゲーム</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 照準（クロスヘア） -->
+  <div id="crosshair"></div>
+
+  <!-- UI: 現在選択中の色 -->
+  <div id="ui">現在の色: <span id="color-name" style="color:#00ff00; font-weight:bold;">緑 (1キー)</span></div>
+
+  <!-- UI: FPSカウンター -->
+  <div id="fps-counter">FPS: <span id="fps-value">0</span></div>
+
+  <!-- Three.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+  <!-- エントリーポイントとなるJSモジュール -->
+  <script type="module" src="js/main.js"></script>
+
+</body>
+</html>

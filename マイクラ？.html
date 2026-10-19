@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>無題のページ</title>
+<style>
+body{
+  margin:0;
+  overflow:hidden;
+  user-select: none;
+}
+#crosshair{
+    position:fixed;
+    left:50%; 
+    top:50%;
+    width:20px;
+    height:20px;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+    z-index:100;
+}
+#crosshair::before,
+#crosshair::after{
+    content:"";
+    position:absolute;
+    background:white;
+}
+#crosshair::before{
+    left:9px;
+    top:0;
+    width:2px;
+    height:20px;
+}
+#crosshair::after{
+    left:0;
+    top:9px;
+    width:20px;
+    height:2px;
+}
+/* 画面上部に現在の色を表示するUI */
+#ui {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    color: white;
+    font-family: sans-serif;
+    background: rgba(0,0,0,0.5);
+    padding: 10px;
+    border-radius: 50px;
+    pointer-events: none;
+    z-index: 100;
+}
+</style>
+</head>
+
+<body>
+
+<div id="crosshair"></div>
+<div id="ui">現在の色: <span id="color-name" style="color:#00ff00; font-weight:bold;">緑 (1キー)</span></div>
+<div id="fps-counter" style="position:fixed; top:60px; left:20px; color:white; font-family:sans-serif; background:rgba(0,0,0,0.5); padding:10px; border-radius:50px; z-index:100; pointer-events:none;">FPS: <span id="fps-value">0</span></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<script>
+
+// シーン
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+// カメラ
+const camera = new THREE.PerspectiveCamera(
+75,
+window.innerWidth/window.innerHeight,
+0.1,
+1000
+);
+
+// player
+const player = new THREE.Object3D();
+player.position.set(0, 15, 0); // 上空スタート
+scene.add(player);
+player.add(camera);
+
+// レンダラー
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.shadowMap.enabled = true;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(window.innerWidth,window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// ウィンドウサイズ変更対応
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// 地面
+const floorGeometry = new THREE.PlaneGeometry(100,100);
+const canvas = document.createElement("canvas");
+canvas.width = 512;
+canvas.height = 512;
+const ctx = canvas.getContext("2d");
+const size = 64;
+
+for(let y=0;y<8;y++){
+    for(let x=0;x<8;x++){
+        if((x+y)%2===0){
+            ctx.fillStyle = "#ffffff";
+        }else{
+            ctx.fillStyle = "#000000";
+        }
+        ctx.fillRect(x*size, y*size, size, size);
+    }
+}
+
+const floorTexture = new THREE.CanvasTexture(canvas); 
+floorTexture.wrapS = THREE.RepeatWrapping;
+floorTexture.wrapT = THREE.RepeatWrapping;
+floorTexture.repeat.set(5,5);
+floorTexture.magFilter = THREE.NearestFilter;
+const floorMaterial = new THREE.MeshStandardMaterial({
+    map: floorTexture,
+    side: THREE.DoubleSide
+});
+const floor = new THREE.Mesh(floorGeometry,floorMaterial);
+floor.receiveShadow = true;
+floor.rotation.x = -Math.PI/2;
+floor.position.y = -0.01;
+scene.add(floor);
+
+// 光
+const light = new THREE.DirectionalLight(0xffffff,0.6);
+light.position.set(20, 40, 20);
+light.castShadow = true;
+light.shadow.mapSize.width = 512;
+light.shadow.mapSize.height = 512;
+scene.add(light);
+
+const ambient = new THREE.AmbientLight(0xffffff,0.4);
+scene.add(ambient);
+
+const walls = [];
+const boxGeometry = new THREE.BoxGeometry(2,2,2);
+
+// 初期3段埋め尽くし配置（負荷軽減のため範囲を少し最適化: -10〜10）
+const areaSize = 48; 
+for (let y = 1.0; y <= 1.0; y += 2) { // 3段 (y=1, y=3, y=5)
+    for (let x = -areaSize; x <= areaSize; x += 2) {
+        for (let z = -areaSize; z <= areaSize; z += 2) {
+            // プレイヤーの初期位置(x=0, z=0)の真上を避けて生成
+            if (Math.abs(x) < 2 && Math.abs(z) < 2) continue;
+
+            const initialMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+            const box = new THREE.Mesh(boxGeometry, initialMaterial);
+            
+            box.castShadow = true;
+            box.receiveShadow = true;
+            box.position.set(x, y, z); 
+            
+            scene.add(box);
+            walls.push(box); 
+        }
+    }
+}
+
+// 改良3: 色選択用の変数とUI更新処理
+let currentHexColor = 0x00ff00; 
+const colorMap = {
+    "Digit1": { color: 0x00ff00, name: "緑 (1キー)" },
+    "Digit2": { color: 0xff0000, name: "赤 (2キー)" },
+    "Digit3": { color: 0x0000ff, name: "青 (3キー)" },
+    "Digit4": { color: 0xffffff, name: "白 (4キー)" },
+    "Digit5": { color: 0x56256e, name: "紫 (5キー)" },
+    "Digit6": { color: 0x00ffff, name: "水 (6キー)" },
+    "Digit7": { color: 0x000000, name: "黒 (7キー)" },
+    "Digit8": { color: 0xffff00, name: "黄 (8キー)" } // バグ修正: 6キー -> 8キー
+};
+
+// プレイヤー設定
+const playerHeight = 3.0; // プレイヤーの当たり判定の高さ（身長）
+camera.position.y = 2.5;  // 目線の高さ（足元 player.position.y からの高さ）
+let velocityY = 0;
+let onGround = true;
+
+const speed = 0.20;
+const playerRadius = 0.4; // AABB用のプレイヤー半径
+const keys = {};
+
+// 正確なプレイヤーの身長に基づいたAABB横衝突判定
+function isColliding(x, z, pY) {
+    const feet = pY;
+    const head = pY + playerHeight;
+
+    for (let wall of walls) {
+        const wX = wall.position.x;
+        const wY = wall.position.y;
+        const wZ = wall.position.z;
+
+        // ブロックサイズは2x2x2（中心から各方向1.0）
+        const minX = wX - 1.0 - playerRadius;
+        const maxX = wX + 1.0 + playerRadius;
+        const minZ = wZ - 1.0 - playerRadius;
+        const maxZ = wZ + 1.0 + playerRadius;
+        const minY = wY - 1.0;
+        const maxY = wY + 1.0;
+
+        if (x > minX && x < maxX && z > minZ && z < maxZ) {
+            if (feet < maxY && head > minY) {
+                return true; 
+            }
+        }
+    }
+    return false;
+}
+
+const raycaster = new THREE.Raycaster();
+
+function createWall(x,y,z){
+    // プレイヤーの身体に重なる位置には設置させない
+    if(
+        Math.abs(x - player.position.x) < 1.0 + playerRadius &&
+        Math.abs(z - player.position.z) < 1.0 + playerRadius &&
+        player.position.y < y + 1.0 &&
+        player.position.y + playerHeight > y - 1.0
+    ){
+        return;
+    }
+
+    const boxMaterial = new THREE.MeshStandardMaterial({
+        color: currentHexColor
+    });
+
+    const box = new THREE.Mesh(boxGeometry, boxMaterial);
+
+    box.position.set(x,y,z);
+
+    box.castShadow = true;
+    box.receiveShadow = true;
+
+    // 設置直後の状態
+    box.userData.velocityY = 0;
+    box.userData.sideHeld = false;
+    box.userData.isFalling = false;
+
+    scene.add(box);
+    walls.push(box);
+
+    // 設置直後も「横に箱があるだけ」では浮かせない。
+// 地面/下面、または安定した箱への支えの経路があるかを調べる。
+box.userData.sideHeld = false;
+
+const supportY = getBoxGroundY(box, box.position.y - boxGravity);
+
+if(supportY !== null){
+    box.position.y = supportY + 1.0;
+}else if(hasStableSupport(box)){
+    box.userData.sideHeld = true;
+}else{
+    box.userData.isFalling = true;
+    box.userData.velocityY = -boxGravity;
+}
+}
+
+// キー入力
+document.addEventListener("keydown",(e)=>{
+    keys[e.code] = true;
+
+    if(e.code==="Space" && onGround){
+        velocityY = 0.23;
+        onGround = false;
+    }
+
+    if(colorMap[e.code]) {
+        currentHexColor = colorMap[e.code].color;
+        const uiSpan = document.getElementById("color-name");
+        uiSpan.innerText = colorMap[e.code].name;
+        uiSpan.style.color = "#" + currentHexColor.toString(16).padStart(6, '0');
+    }
+});
+
+document.addEventListener("keyup",(e)=>{
+    keys[e.code] = false;
+});
+
+// マウスロック
+document.addEventListener("click", () => {
+  if (document.pointerLockElement !== document.body) {
+    document.body.requestPointerLock();
+  }
+});
+
+// マウス視点
+let yaw = 0;
+let pitch = 0;
+
+document.addEventListener("mousemove",(e)=>{
+    if(document.pointerLockElement===document.body){
+        yaw -= e.movementX * 0.0025;
+        pitch -= e.movementY * 0.0025;
+        pitch = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, pitch));
+
+        player.rotation.y = yaw;
+        camera.rotation.x = pitch;
+    }
+});
+
+// マウスダウン（左クリックで設置 / 右クリックで破壊）
+document.addEventListener("mousedown",(event)=>{
+    if(document.pointerLockElement !== document.body) return;
+    if(event.button !== 0 && event.button !== 2) return; 
+
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+
+    raycaster.set(
+        camera.getWorldPosition(new THREE.Vector3()),
+        dir
+    );
+
+    const intersects = raycaster.intersectObjects([floor, ...walls]);
+    if(intersects.length <= 0) return;
+
+    const hit = intersects[0];
+
+    // ===== 左クリック：設置 =====
+    if(event.button === 0) {
+        if(hit.object === floor){
+            const x = Math.round(hit.point.x / 2) * 2;
+            const z = Math.round(hit.point.z / 2) * 2;
+            createWall(x,1.0,z);
+        }else{
+            const normal = hit.face.normal.clone();
+            normal.transformDirection(hit.object.matrixWorld);
+            const pos = hit.object.position.clone();
+            pos.add(normal.multiplyScalar(2));
+
+            createWall(
+                Math.round(pos.x / 2) * 2,
+                Math.round((pos.y - 1) / 2) * 2 + 1,
+                Math.round(pos.z / 2) * 2
+            );
+        }
+    }
+    // ===== 右クリック：破壊 =====
+    else if(event.button === 2) {
+        if(hit.object !== floor) { 
+            const removedBox = hit.object;
+
+            scene.remove(removedBox);
+
+            const index = walls.indexOf(removedBox);
+            if (index > -1) {
+                walls.splice(index, 1);
+            }
+
+            // その箱に支えられていた箱だけを再び落下チェック対象にする
+            wakeBoxesAfterRemoval(removedBox);
+        }
+    }
+});
+
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+
+// ゲームループ
+let lastTime = performance.now();
+let frameCount = 0;
+const fpsSpan = document.getElementById("fps-value");
+
+let prevY = player.position.y;
+// ========================================
+// 箱の重力処理（軽量化版）
+// ========================================
+
+const boxGravity = 0.01;
+const boxEpsilon = 0.001;
+
+// 側面接触チェック
+function hasSideContact(box){
+
+    const boxMinX = box.position.x - 1.0;
+    const boxMaxX = box.position.x + 1.0;
+    const boxMinZ = box.position.z - 1.0;
+    const boxMaxZ = box.position.z + 1.0;
+    const boxMinY = box.position.y - 1.0;
+    const boxMaxY = box.position.y + 1.0;
+
+    for(let other of walls){
+        if(other === box) continue;
+
+        const otherMinX = other.position.x - 1.0;
+        const otherMaxX = other.position.x + 1.0;
+        const otherMinZ = other.position.z - 1.0;
+        const otherMaxZ = other.position.z + 1.0;
+        const otherMinY = other.position.y - 1.0;
+        const otherMaxY = other.position.y + 1.0;
+
+        if(
+            boxMaxY > otherMinY + boxEpsilon &&
+            boxMinY < otherMaxY - boxEpsilon
+        ){
+            const touchX =
+                Math.abs(boxMaxX - otherMinX) <= boxEpsilon ||
+                Math.abs(boxMinX - otherMaxX) <= boxEpsilon;
+
+            const overlapZ =
+                boxMaxZ > otherMinZ + boxEpsilon &&
+                boxMinZ < otherMaxZ - boxEpsilon;
+
+            const touchZ =
+                Math.abs(boxMaxZ - otherMinZ) <= boxEpsilon ||
+                Math.abs(boxMinZ - otherMaxZ) <= boxEpsilon;
+
+            const overlapX =
+                boxMaxX > otherMinX + boxEpsilon &&
+                boxMinX < otherMaxX - boxEpsilon;
+
+            if((touchX && overlapZ) || (touchZ && overlapX)){
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// 下に支えるものを探す
+function getBoxGroundY(box, nextY){
+
+    const currentBottom = box.position.y - 1.0;
+    const nextBottom = nextY - 1.0;
+    let supportY = null;
+
+    // 地面
+    if(
+        currentBottom >= -boxEpsilon &&
+        nextBottom <= boxEpsilon
+    ){
+        supportY = 0;
+    }
+
+    const boxMinX = box.position.x - 1.0;
+    const boxMaxX = box.position.x + 1.0;
+    const boxMinZ = box.position.z - 1.0;
+    const boxMaxZ = box.position.z + 1.0;
+
+    for(let other of walls){
+
+        if(other === box) continue;
+
+        const overlapX =
+            boxMaxX > other.position.x - 1.0 &&
+            boxMinX < other.position.x + 1.0;
+
+        const overlapZ =
+            boxMaxZ > other.position.z - 1.0 &&
+            boxMinZ < other.position.z + 1.0;
+
+        if(!overlapX || !overlapZ) continue;
+
+        const otherTop = other.position.y + 1.0;
+
+        if(
+            currentBottom >= otherTop - boxEpsilon &&
+            nextBottom <= otherTop + boxEpsilon
+        ){
+            if(supportY === null || otherTop > supportY){
+                supportY = otherTop;
+            }
+        }
+    }
+
+    return supportY;
+}
+
+// 「この箱が最終的に地面/安定した箱につながっているか」を調べる。
+// 単純に「横に箱がある」だけでは支えとはみなさない。
+function hasStableSupport(box, visited = new Set()){
+    if(visited.has(box)) return false;
+    visited.add(box);
+
+    const supportY = getBoxGroundY(box, box.position.y - boxGravity);
+    if(supportY !== null) return true;
+
+    // 横に接している箱をたどり、最終的な支えまでの経路を探す。
+    // 落下中の箱は支えとして扱わない。
+    for(let other of walls){
+        if(other === box) continue;
+        if(other.userData.isFalling) continue;
+
+        const dx = Math.abs(other.position.x - box.position.x);
+        const dz = Math.abs(other.position.z - box.position.z);
+
+        // 「横に接している」と認めるには、上下方向にも実際に重なっている
+        // 必要がある。
+        // yの差がちょうど2の場合は、上下に積み重なっているだけなので
+        // 「横から支えている」とはみなさない。
+        const boxMinY = box.position.y - 1.0;
+        const boxMaxY = box.position.y + 1.0;
+        const otherMinY = other.position.y - 1.0;
+        const otherMaxY = other.position.y + 1.0;
+
+        const verticalOverlap =
+            boxMaxY > otherMinY + boxEpsilon &&
+            boxMinY < otherMaxY - boxEpsilon;
+
+        if(!verticalOverlap) continue;
+
+        const sideTouch =
+            (Math.abs(dx - 2) <= boxEpsilon && dz < 2 - boxEpsilon) ||
+            (Math.abs(dz - 2) <= boxEpsilon && dx < 2 - boxEpsilon);
+
+        if(sideTouch && hasStableSupport(other, visited)){
+            return true;
+        }
+    }
+    return false;
+}
+
+// 箱を「落下チェック対象」にする
+function wakeBox(box){
+    // まず、地面・下の箱に直接支えられているか確認
+    const supportY = getBoxGroundY(box, box.position.y - boxGravity);
+
+    if(supportY !== null){
+        box.position.y = supportY + 1.0;
+        box.userData.velocityY = 0;
+        box.userData.isFalling = false;
+        box.userData.sideHeld = false;
+        box.userData.lastRecalcY = box.position.y;
+        return;
+    }
+
+    // 直接の下面支持がなくても、横につながった箱をたどって
+    // 安定した支えがあるなら固定する。
+    if(hasStableSupport(box)){
+        box.userData.sideHeld = true;
+        box.userData.velocityY = 0;
+        box.userData.isFalling = false;
+        box.userData.lastRecalcY = box.position.y;
+        return;
+    }
+
+    // 支えの経路がどこにもなければ落下。
+    box.userData.sideHeld = false;
+    box.userData.isFalling = true;
+    box.userData.velocityY = -boxGravity;
+    box.userData.lastRecalcY = box.position.y;
+}
+
+// 再計算する範囲。
+// 2.0だと「すぐ隣」しか見ないので、少し広めに調べる。
+const recalcRadius = 6.01;
+
+// 指定した箱の周囲にある箱を再計算する。
+// 「上・下・横」のどこにある箱でも対象にする。
+// ただし、遠すぎる箱まで毎回調べない。
+function recalculateNearbyBoxes(centerBox, radius = recalcRadius){
+
+    for(let box of walls){
+
+        if(box === centerBox) continue;
+
+        const dx = box.position.x - centerBox.position.x;
+        const dz = box.position.z - centerBox.position.z;
+
+        // XZ平面で一定範囲内
+        if(Math.abs(dx) > radius || Math.abs(dz) > radius){
+            continue;
+        }
+
+        // 落下中の箱自身は wakeBox で止めない。
+        // 「落下中は側面接触を無視する」というルールを維持する。
+        if(box.userData.isFalling){
+            continue;
+        }
+
+        wakeBox(box);
+    }
+}
+
+// 箱を削除したときは、削除位置の周囲を広めに再計算する。
+// さらに、その再計算で状態が変わった箱の周囲も再計算することで、
+// 連鎖的に支えがなくなった箱まで追跡する。
+function wakeBoxesAfterRemoval(removed){
+
+    const queue = [removed];
+    const checked = new Set();
+
+    // 最大範囲を広めに設定
+    const radius = 8.01;
+
+    while(queue.length > 0){
+
+        const center = queue.shift();
+
+        if(checked.has(center)) continue;
+        checked.add(center);
+
+        for(let box of walls){
+
+            if(checked.has(box)) continue;
+
+            const dx = box.position.x - center.position.x;
+            const dz = box.position.z - center.position.z;
+
+            if(Math.abs(dx) > radius || Math.abs(dz) > radius){
+                continue;
+            }
+
+            // 上下関係も含めて広い範囲を再計算
+            const dy = Math.abs(box.position.y - center.position.y);
+
+            if(dy > 8.01){
+                continue;
+            }
+
+            const wasFalling = box.userData.isFalling === true;
+            const oldY = box.position.y;
+            const oldVelocity = box.userData.velocityY || 0;
+            const oldSideHeld = box.userData.sideHeld === true;
+
+            // すでに落下中の箱は止めず、
+            // 落下中の箱の周囲にある「止まっている箱」を再計算する。
+            if(!wasFalling){
+                wakeBox(box);
+            }
+
+            // 状態が変化した箱は次の中心として扱う。
+            const changed =
+                oldY !== box.position.y ||
+                oldVelocity !== (box.userData.velocityY || 0) ||
+                oldSideHeld !== (box.userData.sideHeld === true) ||
+                wasFalling !== (box.userData.isFalling === true);
+
+            if(changed){
+                queue.push(box);
+            }
+        }
+    }
+}
+
+// 落下中の箱が動いたとき、その周囲の箱も再計算する。
+// 毎フレーム全箱を起こすと重くなるので、少し移動した時だけ行う。
+function recalculateAroundFallingBox(box){
+
+    if(!box.userData.isFalling) return;
+
+    const lastY = box.userData.lastRecalcY;
+
+    if(lastY === undefined){
+        box.userData.lastRecalcY = box.position.y;
+        return;
+    }
+
+    // 0.25ブロック以上動いたら周囲を再計算
+    if(Math.abs(box.position.y - lastY) < 0.25){
+        return;
+    }
+
+    box.userData.lastRecalcY = box.position.y;
+    recalculateNearbyBoxes(box, 6.01);
+}
+
+// 全箱の重力処理
+function updateBoxGravity(){
+
+    for(let box of walls){
+
+        if(box.userData.velocityY === undefined){
+            box.userData.velocityY = 0;
+        }
+        if(box.userData.isFalling === undefined){
+            box.userData.isFalling = false;
+        }
+
+        // 落下開始前の箱は、安定した支えの経路があるか確認する。
+// 単なる横接触だけでは固定しない。
+        if(box.userData.sideHeld && !box.userData.isFalling){
+
+            if(hasStableSupport(box)){
+                box.userData.velocityY = 0;
+                continue;
+            }
+
+            // 安定した支えの経路がなくなったので落下開始
+            box.userData.sideHeld = false;
+            box.userData.isFalling = true;
+            box.userData.velocityY = -boxGravity;
+        }
+
+        // 完全に停止している箱は計算しない
+        if(box.userData.velocityY === 0 && !box.userData.isFalling){
+            continue;
+        }
+
+        // 一度落下を始めた箱は、側面接触を無視する
+        // 下面が地面・箱の上面につくまで落下する
+        if(box.userData.isFalling){
+            box.userData.velocityY -= boxGravity;
+        }
+
+        const nextY = box.position.y + box.userData.velocityY;
+        const groundY = getBoxGroundY(box, nextY);
+
+        if(groundY !== null){
+
+            box.position.y = groundY + 1.0;
+            box.userData.velocityY = 0;
+            box.userData.isFalling = false;
+            box.userData.sideHeld = false;
+
+            // 着地した場所の周囲も再計算
+            recalculateNearbyBoxes(box, 6.01);
+
+        }else{
+
+            box.position.y = nextY;
+            box.userData.isFalling = true;
+
+            // 落下している箱の周囲も定期的に再計算
+            recalculateAroundFallingBox(box);
+        }
+    }
+}
+
+function animate(){
+    frameCount++;
+    const time = performance.now();
+    if (time >= lastTime + 1000) { 
+        fpsSpan.innerText = frameCount; 
+        frameCount = 0;
+        lastTime = time;
+    }
+    requestAnimationFrame(animate);
+    prevY = player.position.y;
+    // 箱に重力を適用
+    updateBoxGravity();
+
+    // 移動ベクトルの計算
+    let moveX = 0;
+    let moveZ = 0;
+
+    if(keys["KeyW"]){
+        moveX += -Math.sin(yaw) * speed;
+        moveZ += -Math.cos(yaw) * speed;
+    }
+    if(keys["KeyS"]){
+        moveX += Math.sin(yaw) * speed;
+        moveZ += Math.cos(yaw) * speed;
+    }
+    if(keys["KeyA"]){
+        moveX += -Math.cos(yaw) * speed;
+        moveZ += Math.sin(yaw) * speed;
+    }
+    if(keys["KeyD"]){
+        moveX += Math.cos(yaw) * speed;
+        moveZ += -Math.sin(yaw) * speed;
+    }
+
+    let nextX = player.position.x + moveX;
+    let nextZ = player.position.z + moveZ;
+
+    if (!isColliding(nextX, player.position.z, player.position.y)) {
+        player.position.x = nextX;
+    }
+    if (!isColliding(player.position.x, nextZ, player.position.y)) {
+        player.position.z = nextZ;
+    }
+
+    // 重力とジャンプ
+    velocityY -= 0.01;
+    player.position.y += velocityY;
+
+    // 天井（頭上）の衝突判定（ playerHeight 定数を使用 ）
+    for(let wall of walls){
+        // X, Z の衝突範囲を 0.5 から 1.0 に修正（ブロックの正確な幅に合わせる）
+        const minX = wall.position.x - 1.0 - playerRadius;
+        const maxX = wall.position.x + 1.0 + playerRadius;
+        const minZ = wall.position.z - 1.0 - playerRadius;
+        const maxZ = wall.position.z + 1.0 + playerRadius;
+
+        if(player.position.x > minX && player.position.x < maxX && player.position.z > minZ && player.position.z < maxZ){
+            const bottom = wall.position.y - 1.0; // ブロックの下端は y - 1.0
+            const headNow = player.position.y + playerHeight;
+            const headPrev = prevY + playerHeight;
+            
+            if(headPrev <= bottom && headNow >= bottom && velocityY > 0){
+                player.position.y = bottom - playerHeight;
+                velocityY = 0;
+            }
+        }
+    }
+
+    // 床・ブロックの着地判定
+    let groundY = 0;
+    let landed = false;
+    
+    for(let wall of walls){
+        const minX = wall.position.x - 1.0 - playerRadius;
+        const maxX = wall.position.x + 1.0 + playerRadius;
+        const minZ = wall.position.z - 1.0 - playerRadius;
+        const maxZ = wall.position.z + 1.0 + playerRadius;
+
+        if(player.position.x > minX && player.position.x < maxX && player.position.z > minZ && player.position.z < maxZ){
+            const top = wall.position.y + 1.0;
+            const feetNow = player.position.y;
+            
+            if(velocityY <= 0 && feetNow >= top - 0.25 && feetNow <= top + 0.2 && prevY >= wall.position.y + 0.9){
+                groundY = Math.max(groundY, top);
+                landed = true;
+            }
+        }
+    }
+
+    // 着地状態の適用
+    if(landed){
+        player.position.y = groundY;
+        velocityY = 0;
+        onGround = true;
+    }else if(player.position.y < 0){ 
+        player.position.y = 0;
+        velocityY = 0;
+        onGround = true;
+    }else{
+        onGround = false;
+    }
+
+    // 描画
+    renderer.render(scene,camera);
+}
+
+animate();
+
+</script>
+
+</body>
+</html>
